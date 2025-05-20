@@ -30,10 +30,6 @@ export class Parser {
     );
   }
 
-  private peek(): Token {
-    return this.currentToken;
-  }
-
   // Programa principal
   public parse(): Program {
     const program: Program = {
