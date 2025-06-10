@@ -1,26 +1,40 @@
 import { Token, TokenType } from "./types";
 
-export class Lexer {
-  private source: string;
-  private position: number = 0;
-  private line: number = 1;
-  private column: number = 0;
-  private currentChar: string | null = null;
+const SYMBOLS: Record<string, TokenType> = {
+  "(": TokenType.LPAREN,
+  ")": TokenType.RPAREN,
+  "{": TokenType.LBRACE,
+  "}": TokenType.RBRACE,
+  ",": TokenType.COMMA,
+};
 
-  constructor(source: string) {
-    this.source = source;
-    this.currentChar = this.source.length > 0 ? this.source[0] : null;
+const KEYWORDS: Record<string, TokenType> = {
+  bpm: TokenType.BPM,
+  volume: TokenType.VOLUME,
+  repeat: TokenType.REPEAT,
+  sequence: TokenType.SEQUENCE,
+};
+
+const NOTES = new Set(["C", "D", "E", "F", "G", "A", "B"]);
+
+export class Lexer {
+  private position = 0;
+  private line = 1;
+  private column = 0;
+  private currentChar: string | null;
+
+  constructor(private source: string) {
+    this.currentChar = source.length > 0 ? source[0] : null;
   }
 
   private advance(): void {
     this.position++;
     this.column++;
-    this.currentChar =
-      this.position < this.source.length ? this.source[this.position] : null;
+    this.currentChar = this.position < this.source.length ? this.source[this.position] : null;
   }
 
-  private skipWhitespace(): void {
-    while (this.currentChar && /\s/.test(this.currentChar)) {
+  private skipWhile(condition: (char: string) => boolean): void {
+    while (this.currentChar && condition(this.currentChar)) {
       if (this.currentChar === "\n") {
         this.line++;
         this.column = 0;
@@ -29,181 +43,103 @@ export class Lexer {
     }
   }
 
+  private skipWhitespace(): void {
+    this.skipWhile(char => /\s/.test(char));
+  }
+
   private skipComment(): void {
-    // Skip the initial //
-    this.advance(); // Skip first /
-    this.advance(); // Skip second /
+    // Assume já detectado "//"
+    this.advance(); // skip first /
+    this.advance(); // skip second /
+    this.skipWhile(char => char !== "\n");
 
-    // Skip until end of line
-    while (this.currentChar !== null && this.currentChar !== "\n") {
-      this.advance();
-    }
-
-    // Skip the newline character
     if (this.currentChar === "\n") {
       this.line++;
       this.column = 0;
       this.advance();
     }
 
-    // Skip any whitespace after the comment
     this.skipWhitespace();
   }
 
   private isNoteStart(): boolean {
-    const notes = ["C", "D", "E", "F", "G", "A", "B"];
-    return (
-      this.currentChar !== null &&
-      notes.includes(this.currentChar.toUpperCase()) &&
-      // Verifica se o próximo caractere é um modificador (#, b) ou um número
-      this.position + 1 < this.source.length &&
-      (this.source[this.position + 1] === "#" ||
-        this.source[this.position + 1] === "b" ||
-        /[0-9]/.test(this.source[this.position + 1]))
-    );
+    if (!this.currentChar || !NOTES.has(this.currentChar.toUpperCase())) return false;
+    const nextChar = this.source[this.position + 1];
+    return nextChar === "#" || nextChar === "b" || /[0-9]/.test(nextChar);
+  }
+
+  private readWhile(condition: (char: string) => boolean): string {
+    let value = "";
+    while (this.currentChar && condition(this.currentChar)) {
+      value += this.currentChar;
+      this.advance();
+    }
+    return value;
   }
 
   private readNote(): Token {
     const startColumn = this.column;
-    let value = "";
-
-    // Lê a nota (C, D, etc)
-    value += this.currentChar;
+    let value = this.currentChar!;
     this.advance();
 
-    // Lê o modificador (#, b) se existir
     if (this.currentChar === "#" || this.currentChar === "b") {
       value += this.currentChar;
       this.advance();
     }
 
-    // Lê a oitava
-    let hasOctave = false;
-    while (this.currentChar && /[0-9]/.test(this.currentChar)) {
-      value += this.currentChar;
-      hasOctave = true;
-      this.advance();
+    const octave = this.readWhile(char => /[0-9]/.test(char));
+    if (!octave) {
+      throw new Error(`Nota inválida (falta oitava): ${value} na linha ${this.line}, coluna ${startColumn}`);
     }
 
-    if (!hasOctave) {
-      throw new Error(
-        `Nota inválida (falta oitava): ${value} na linha ${this.line}, coluna ${startColumn}`
-      );
-    }
+    value += octave;
 
-    return {
-      type: TokenType.NOTE,
-      value,
-      line: this.line,
-      column: startColumn,
-    };
+    return this.createToken(TokenType.NOTE, value, startColumn);
   }
 
   private readNumber(): Token {
     const startColumn = this.column;
-    let value = "";
-
-    while (this.currentChar && /[0-9/.]/.test(this.currentChar)) {
-      value += this.currentChar;
-      this.advance();
-    }
-
-    return {
-      type: TokenType.NUMBER,
-      value,
-      line: this.line,
-      column: startColumn,
-    };
+    const value = this.readWhile(char => /[0-9/.]/.test(char));
+    return this.createToken(TokenType.NUMBER, value, startColumn);
   }
 
   private readIdentifier(): Token {
     const startColumn = this.column;
-    let value = "";
+    const value = this.readWhile(char => /[a-zA-Z_]/.test(char));
+    const type = KEYWORDS[value.toLowerCase()] || TokenType.IDENTIFIER;
+    return this.createToken(type, value, startColumn);
+  }
 
-    while (this.currentChar && /[a-zA-Z_]/.test(this.currentChar)) {
-      value += this.currentChar;
-      this.advance();
-    }
-
-    // Verifica se é uma palavra-chave
-    const keywords: { [key: string]: TokenType } = {
-      bpm: TokenType.BPM,
-      volume: TokenType.VOLUME,
-      repeat: TokenType.REPEAT,
-      sequence: TokenType.SEQUENCE,
-    };
-
-    return {
-      type: keywords[value.toLowerCase()] || TokenType.IDENTIFIER,
-      value,
-      line: this.line,
-      column: startColumn,
-    };
+  private createToken(type: TokenType, value: string, column: number): Token {
+    return { type, value, line: this.line, column };
   }
 
   public nextToken(): Token {
     while (this.currentChar !== null) {
-      // Ignora espaços em branco
       if (/\s/.test(this.currentChar)) {
         this.skipWhitespace();
         continue;
       }
 
-      // Handle comments
-      if (
-        this.currentChar === "/" &&
-        this.position + 1 < this.source.length &&
-        this.source[this.position + 1] === "/"
-      ) {
+      if (this.currentChar === "/" && this.source[this.position + 1] === "/") {
         this.skipComment();
         continue;
       }
 
-      // Notas musicais (deve vir antes dos identificadores)
-      if (this.isNoteStart()) {
-        return this.readNote();
-      }
+      if (this.isNoteStart()) return this.readNote();
+      if (/[a-zA-Z_]/.test(this.currentChar)) return this.readIdentifier();
+      if (/[0-9]/.test(this.currentChar)) return this.readNumber();
 
-      // Identificadores e palavras-chave
-      if (/[a-zA-Z_]/.test(this.currentChar)) {
-        return this.readIdentifier();
-      }
-
-      // Números e durações
-      if (/[0-9]/.test(this.currentChar)) {
-        return this.readNumber();
-      }
-
-      // Símbolos
-      const symbols: { [key: string]: TokenType } = {
-        "(": TokenType.LPAREN,
-        ")": TokenType.RPAREN,
-        "{": TokenType.LBRACE,
-        "}": TokenType.RBRACE,
-        ",": TokenType.COMMA,
-      };
-
-      if (this.currentChar in symbols) {
-        const token: Token = {
-          type: symbols[this.currentChar],
-          value: this.currentChar,
-          line: this.line,
-          column: this.column,
-        };
+      const type = SYMBOLS[this.currentChar];
+      if (type !== undefined) {
+        const token = this.createToken(type, this.currentChar, this.column);
         this.advance();
         return token;
       }
 
-      throw new Error(
-        `Caractere inválido: ${this.currentChar} na linha ${this.line}, coluna ${this.column}`
-      );
+      throw new Error(`Caractere inválido: ${this.currentChar} na linha ${this.line}, coluna ${this.column}`);
     }
 
-    return {
-      type: TokenType.EOF,
-      value: "",
-      line: this.line,
-      column: this.column,
-    };
+    return this.createToken(TokenType.EOF, "", this.column);
   }
 }
