@@ -30,23 +30,23 @@ export class Lexer {
   }
 
   private skipComment(): void {
-    // Skip the initial //
-    this.advance(); // Skip first /
-    this.advance(); // Skip second /
+    // Pula a inicial //
+    this.advance(); // Pula primeira /
+    this.advance(); // Pula segunda /
 
-    // Skip until end of line
+    // Pula até a ultima linha
     while (this.currentChar !== null && this.currentChar !== "\n") {
       this.advance();
     }
 
-    // Skip the newline character
+    // Pula a newline character
     if (this.currentChar === "\n") {
       this.line++;
       this.column = 0;
       this.advance();
     }
 
-    // Skip any whitespace after the comment
+    // Pula qualquer espaço em branco antes dos comentários
     this.skipWhitespace();
   }
 
@@ -149,7 +149,7 @@ export class Lexer {
         continue;
       }
 
-      // Handle comments
+      // Lida com comentários
       if (
         this.currentChar === "/" &&
         this.position + 1 < this.source.length &&
