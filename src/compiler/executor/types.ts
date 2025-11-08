@@ -43,9 +43,22 @@ export const BASE_DURATIONS: { [key: string]: number } = {
   "1/16": 0.125, // Semicolcheia
 };
 
+export type WaveType = 'sine' | 'square' | 'triangle' | 'sawtooth';
+
+export interface SynthOptions {
+  waveType?: WaveType;
+  attack?: number;
+  decay?: number;
+  sustain?: number;
+  release?: number;
+  filterFrequency?: number;
+  filterQ?: number;
+}
+
 export interface ExecutorOptions {
   onNoteStart?: (note: string, time: number) => void;
   onNoteEnd?: (note: string, time: number) => void;
   onSequenceStart?: (name: string, time: number) => void;
   onSequenceEnd?: (name: string, time: number) => void;
+  synthOptions?: SynthOptions;
 }
