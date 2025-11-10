@@ -90,10 +90,18 @@ export class Parser {
   private parseBpmStatement(): BpmStatement {
     const token = this.eat(TokenType.BPM);
     const valueToken = this.eat(TokenType.NUMBER);
+    const bpmValue = parseInt(valueToken.value);
+
+    // Valida o range do BPM (20-300 é razoável)
+    if (bpmValue < 20 || bpmValue > 300) {
+      throw new Error(
+        `BPM inválido: ${bpmValue}. Deve estar entre 20 e 300 na linha ${token.line}, coluna ${token.column}`
+      );
+    }
 
     return {
       type: "BpmStatement",
-      value: parseInt(valueToken.value),
+      value: bpmValue,
       line: token.line,
       column: token.column,
     };
@@ -102,10 +110,18 @@ export class Parser {
   private parseVolumeStatement(): VolumeStatement {
     const token = this.eat(TokenType.VOLUME);
     const valueToken = this.eat(TokenType.NUMBER);
+    const volumeValue = parseInt(valueToken.value);
+
+    // Valida o range do volume (0-100)
+    if (volumeValue < 0 || volumeValue > 100) {
+      throw new Error(
+        `Volume inválido: ${volumeValue}. Deve estar entre 0 e 100 na linha ${token.line}, coluna ${token.column}`
+      );
+    }
 
     return {
       type: "VolumeStatement",
-      value: parseInt(valueToken.value),
+      value: volumeValue,
       line: token.line,
       column: token.column,
     };
