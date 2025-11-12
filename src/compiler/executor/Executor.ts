@@ -5,12 +5,15 @@ import {
   ExecutorOptions,
   NOTE_FREQUENCIES,
   NoteInfo,
+  SynthOptions,
 } from "./types";
 
 export class Executor {
   private state: AudioContextState;
   private currentTime: number = 0;
   private options: ExecutorOptions;
+  private synthOptions: Required<SynthOptions>;
+  private activeNodes: Set<AudioNode> = new Set();
 
   constructor(options: ExecutorOptions = {}) {
     const context = new AudioContext();
@@ -25,48 +28,39 @@ export class Executor {
     };
 
     this.options = options;
+
+    // Configurações padrão de síntese com valores otimizados
+    this.synthOptions = {
+      waveType: options.synthOptions?.waveType || 'triangle',
+      attack: options.synthOptions?.attack || 0.02,
+      decay: options.synthOptions?.decay || 0.1,
+      sustain: options.synthOptions?.sustain || 0.7,
+      release: options.synthOptions?.release || 0.15,
+      filterFrequency: options.synthOptions?.filterFrequency || 2000,
+      filterQ: options.synthOptions?.filterQ || 1,
+    };
   }
 
   // Calcula a frequência de uma nota em uma oitava específica
   private getNoteFrequency(note: string, octave: number): number {
-    // Garante que a nota base tenha o formato correto (ex: C0, D#0, etc.)
     const baseNote = (note + "0").replace(/\d+0$/, "0");
     const baseFreq = NOTE_FREQUENCIES[baseNote];
 
     if (baseFreq === undefined) {
-      console.error("Invalid note:", {
-        note,
-        baseNote,
-        availableNotes: Object.keys(NOTE_FREQUENCIES),
-      });
       throw new Error(`Invalid note: ${note} (base note: ${baseNote})`);
     }
 
     if (!Number.isFinite(octave)) {
-      console.error("Invalid octave:", octave);
       throw new Error(`Invalid octave: ${octave}`);
     }
 
     const calculatedFreq = baseFreq * Math.pow(2, octave);
 
     if (!Number.isFinite(calculatedFreq)) {
-      console.error("Invalid frequency calculation:", {
-        baseFreq,
-        octave,
-        calculatedFreq,
-      });
       throw new Error(
         `Invalid frequency calculation for note ${note} octave ${octave}`
       );
     }
-
-    console.log("Debug - getNoteFrequency:", {
-      inputNote: note,
-      inputOctave: octave,
-      baseNote,
-      baseFreq,
-      calculatedFreq,
-    });
 
     return calculatedFreq;
   }
@@ -77,62 +71,104 @@ export class Executor {
     return (baseDuration * 60) / this.state.tempo;
   }
 
-  // Toca uma única nota
+  // Toca uma única nota com síntese melhorada
   private async playNote(noteInfo: NoteInfo): Promise<void> {
-    console.log("Debug - playNote input:", noteInfo);
     const { context, mainGainNode } = this.state;
 
-    // Cria o oscilador
-    const oscillator = context.createOscillator();
-    oscillator.type = "sine";
     if (!Number.isFinite(noteInfo.frequency)) {
-      console.error("Invalid frequency detected:", noteInfo.frequency);
       return;
     }
+
+    // Cria o oscilador principal
+    const oscillator = context.createOscillator();
+    oscillator.type = this.synthOptions.waveType;
     oscillator.frequency.value = noteInfo.frequency;
 
-    // Cria o envelope de amplitude
+    // Cria filtro low-pass para som mais natural
+    const filter = context.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = this.synthOptions.filterFrequency;
+    filter.Q.value = this.synthOptions.filterQ;
+
+    // Cria o envelope ADSR completo
     const gainNode = context.createGain();
     gainNode.gain.value = 0;
 
-    // Conecta os nós
-    oscillator.connect(gainNode);
+    // Conecta os nós: Oscillator -> Filter -> Gain -> Main
+    oscillator.connect(filter);
+    filter.connect(gainNode);
     gainNode.connect(mainGainNode);
 
-    // Agenda o início da nota
-    const startTime = noteInfo.startTime;
-    const attackTime = 0.01;
-    const releaseTime = 0.05;
+    // Registra nós ativos para limpeza posterior
+    this.activeNodes.add(oscillator);
+    this.activeNodes.add(filter);
+    this.activeNodes.add(gainNode);
 
+    // Parâmetros do envelope ADSR
+    const startTime = noteInfo.startTime;
+    const { attack, decay, sustain, release } = this.synthOptions;
+
+    const peakVolume = noteInfo.volume;
+    const sustainVolume = peakVolume * sustain;
+
+    // ADSR Envelope completo
+    const attackEndTime = startTime + attack;
+    const decayEndTime = attackEndTime + decay;
+    const noteEndTime = startTime + noteInfo.duration - release;
+    const releaseEndTime = startTime + noteInfo.duration;
+
+    // Attack: 0 -> peak
     gainNode.gain.setValueAtTime(0, startTime);
-    gainNode.gain.linearRampToValueAtTime(
-      noteInfo.volume,
-      startTime + attackTime
+    gainNode.gain.linearRampToValueAtTime(peakVolume, attackEndTime);
+
+    // Decay: peak -> sustain
+    gainNode.gain.linearRampToValueAtTime(sustainVolume, decayEndTime);
+
+    // Sustain: mantém o nível
+    gainNode.gain.setValueAtTime(sustainVolume, noteEndTime);
+
+    // Release: sustain -> 0
+    gainNode.gain.linearRampToValueAtTime(0, releaseEndTime);
+
+    // Variação sutil no filtro durante a nota para mais naturalidade
+    filter.frequency.setValueAtTime(this.synthOptions.filterFrequency, startTime);
+    filter.frequency.linearRampToValueAtTime(
+      this.synthOptions.filterFrequency * 0.8,
+      releaseEndTime
     );
-    gainNode.gain.setValueAtTime(
-      noteInfo.volume,
-      startTime + noteInfo.duration - releaseTime
-    );
-    gainNode.gain.linearRampToValueAtTime(0, startTime + noteInfo.duration);
 
     // Inicia e para o oscilador
     oscillator.start(startTime);
-    oscillator.stop(startTime + noteInfo.duration);
+    oscillator.stop(releaseEndTime);
 
-    // Notifica o início e fim da nota
+    // Limpa os nós após a nota terminar
+    oscillator.onended = () => {
+      this.activeNodes.delete(oscillator);
+      this.activeNodes.delete(filter);
+      this.activeNodes.delete(gainNode);
+
+      try {
+        oscillator.disconnect();
+        filter.disconnect();
+        gainNode.disconnect();
+      } catch (e) {
+        // Nós já podem estar desconectados
+      }
+    };
+
+    // Notifica callbacks
     if (this.options.onNoteStart) {
+      const noteString = `${noteInfo.frequency.toFixed(2)} Hz`;
       setTimeout(() => {
-        this.options.onNoteStart!(noteInfo.frequency.toString(), startTime);
-      }, startTime * 1000);
+        this.options.onNoteStart!(noteString, startTime);
+      }, (startTime - context.currentTime) * 1000);
     }
 
     if (this.options.onNoteEnd) {
+      const noteString = `${noteInfo.frequency.toFixed(2)} Hz`;
       setTimeout(() => {
-        this.options.onNoteEnd!(
-          noteInfo.frequency.toString(),
-          startTime + noteInfo.duration
-        );
-      }, (startTime + noteInfo.duration) * 1000);
+        this.options.onNoteEnd!(noteString, releaseEndTime);
+      }, (releaseEndTime - context.currentTime) * 1000);
     }
   }
 
@@ -197,12 +233,48 @@ export class Executor {
     program.body.forEach((statement) => this.executeStatement(statement));
   }
 
-  // Para a execução e limpa os recursos
+  // Para a execução e limpa os recursos de forma adequada
   public stop(): void {
+    // Fade out suave do volume principal
+    const fadeTime = 0.05;
     this.state.mainGainNode.gain.setValueAtTime(
-      0,
+      this.state.mainGainNode.gain.value,
       this.state.context.currentTime
     );
-    this.state.context.close();
+    this.state.mainGainNode.gain.linearRampToValueAtTime(
+      0,
+      this.state.context.currentTime + fadeTime
+    );
+
+    // Limpa todos os nós ativos
+    setTimeout(() => {
+      this.activeNodes.forEach(node => {
+        try {
+          node.disconnect();
+        } catch (e) {
+          // Nó já pode estar desconectado
+        }
+      });
+      this.activeNodes.clear();
+
+      // Restaura o volume para próxima execução
+      this.state.mainGainNode.gain.setValueAtTime(
+        1,
+        this.state.context.currentTime
+      );
+    }, fadeTime * 1000);
+  }
+
+  // Permite atualizar opções de síntese em tempo real
+  public updateSynthOptions(options: Partial<SynthOptions>): void {
+    this.synthOptions = {
+      ...this.synthOptions,
+      ...options,
+    };
+  }
+
+  // Retorna as opções atuais de síntese
+  public getSynthOptions(): SynthOptions {
+    return { ...this.synthOptions };
   }
 }
