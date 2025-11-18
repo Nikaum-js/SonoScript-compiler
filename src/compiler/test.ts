@@ -1,6 +1,5 @@
 import { Parser } from "./parser/Parser";
-
-// Exemplos de código SonoScript para testar
+// Teste de código no Script criado "Sono"
 const testCases = [
   // Caso 1: Apenas notas simples
   {
@@ -9,7 +8,6 @@ const testCases = [
       C4 1/4, D4 1/4, E4 1/4
     `,
   },
-
   // Caso 2: Controles de tempo e volume
   {
     name: "Controles",
